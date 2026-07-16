@@ -1,6 +1,7 @@
 import json
 import os
-from urllib.request import Request, urlopen
+import requests
+#from urllib.request import Request, urlopen
 import gradio as gr
 from dotenv import load_dotenv
 
@@ -43,36 +44,78 @@ def format_hotels(hotels):
 
 
 def call_chat_api(message):
-    payload = json.dumps({"message": message}).encode("utf-8")
-    request = Request(os.getenv("BACKEND_URL"), data=payload, headers={"Content-Type": "application/json"})
+    url = os.getenv("BACKEND_STREAM_URL")
+    payload = {"message":message}
+
+    status_lines = []
+    final_answer = ""
 
     try:
-        response = urlopen(request, timeout=15)
-        data = json.loads(response.read().decode("utf-8"))
+        response = requests.post(url, json=payload, stream=True, timeout=30)
+        for line in response.iter_lines():
+            if line:
+                chunk = json.loads(line)
+                if chunk["type"] == "status":
+                    status_lines.append(chunk["content"])
+                elif chunk["type"] == "result":
+                    final_answer = chunk["content"]
     except Exception as exc:
-        return f"Unexpected error: {exc}"
+        return f"Error: {exc}"
+    
+    parts = status_lines + [final_answer]
+    return "\n".join(parts)
 
-    chat_text = data.get("response", "No response returned.")
-    parts = [chat_text]
 
-    if data.get("flights"):
-        parts.append(format_flights(data["flights"]))
-    if data.get("hotels"):
-        parts.append(format_hotels(data["hotels"]))
 
-    return "\n\n".join(parts)
 
+def call_chat_api_stream(message):
+    url = os.getenv("BACKEND_STREAM_URL")
+    payload = {"message":message}
+    try:
+        response = requests.post(url, json=payload, stream=True, timeout=30)
+        for line in response.iter_lines():
+            if line:
+                chunk = json.loads(line)
+                yield chunk
+    except Exception as exc:
+        yield {"type": "error", "content": str(exc)}
 
 def respond(message, history):
     if history is None:
         history = []
+    
+    partial = ""
+    status_log = []
+    
+    for chunk in call_chat_api_stream(message):
+        chunk_type = chunk.get("type")
+        content = chunk.get("content", "")
 
-    answer = call_chat_api(message)
-    history = history + [
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": answer},
-    ]
-    return history, history
+        if chunk_type == "status":
+           status_log.append(content)
+           current_display = "\n".join(status_log) + "\n ⏳ Working..."
+           yield (
+                history + [{"role": "user", "content": message},
+                            {"role": "assistant", "content": current_display}],
+                history
+           )
+           
+        elif chunk_type == "result":
+            partial = "\n".join(status_log) + "\n\n" + content
+            yield (
+                history + [{"role": "user", "content": message},
+                            {"role": "assistant", "content": partial}],
+                history + [{"role": "user", "content": message},
+                            {"role": "assistant", "content": partial}]
+            )
+        elif chunk_type == "error":
+            yield (
+                history + [{"role": "user", "content": message},
+                            {"role": "assistant", "content": f"⚠️ {content}"}],
+                history
+            )
+            
+    
 
 
 def main():
@@ -80,7 +123,7 @@ def main():
         gr.Markdown(
             "# Travel Planner Chat\nAsk the backend for flights, hotels, or travel plans. ``TRAVEL_PLANNER_API_URL`` can be set to point to your FastAPI server."
         )
-        chatbot = gr.Chatbot()
+        chatbot = gr.Chatbot(type="messages")
         message = gr.Textbox(label="Your message", placeholder="Find me flights from CAN to HAN on 2025-11-15")
         submit = gr.Button("Send")
 

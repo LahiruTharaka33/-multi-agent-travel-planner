@@ -1,0 +1,44 @@
+TripWeaver - MCP Enhancement Sprint Plan
+This plan documents the transition of the baseline multi-agent travel planner to an MCP-based architecture, following the core requirements.
+
+1. Architectural Shift (MCP Integration)
+Currently, 
+
+agents/tools.py
+ directly executes API requests to the hotel and flight backends. We will create two standalone Model Context Protocol (MCP) servers using FastMCP (or similar standard MCP Python SDK):
+
+
+mcp_servers/hotel_service.py
+: Exposes 
+
+get_hotels
+, 
+
+search_hotel
+, 
+
+book_hotel
+.
+mcp_servers/flight_service.py: Exposes 
+
+get_flights
+, 
+
+search_flights
+, 
+
+book_flight
+.
+The agents will no longer contain hardcoded API urls natively. Instead, they will communicate with these services through the MCP protocol layer.
+
+2. Dynamic Intent-Routed Graph
+The workflow logic in 
+
+agents/graph.py
+ will route to specific nodes based on the output of an Intent Extractor, making sure we don't assume a linear approach. The agents will process the specific goals and gracefully state when there's insufficient data to complete a tool call.
+
+3. Graceful Failure Mitigation
+If an MCP tool errors out (e.g. server down), the agent intercepts the error and gives a friendly fallback message, ensuring the main application loop does not crash.
+
+4. Streaming Updates & UI
+Refactor the FastAPI/LangGraph pipeline to support real-time token streaming to a Gradio interface. Incorporate intermediate event logging (e.g. "Searching...").

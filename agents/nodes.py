@@ -1,16 +1,19 @@
+import json
+import logging
 from typing import Optional, Literal
 
-from pydantic import BaseModel, Field
-from langchain_core.messages import SystemMessage, HumanMessage,AIMessage
+logger = logging.getLogger("agents")
 
-from .tools import get_hotels, search_hotel, get_flights, search_flights, book_hotel,book_flight
+from pydantic import BaseModel, Field
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from .mcp_client import hotel_mcp_tools, flight_mcp_tools
 from .llm import llm
 from .prompts import get_system_prompt_with_history, get_system_prompt_for_unknown_node
 from .entity import GraphState
 
 
 class TravelExtraction(BaseModel):
-    intent: Literal["hotel", "flight", "unknown"] = Field(
+    intent: Literal["hotel", "flight", "unknown", "plan"] = Field(
         default="unknown",
         description="Main user intent: hotel, flight, or unknown."
     )
@@ -86,6 +89,11 @@ class TravelExtraction(BaseModel):
 
 travel_extractor = llm.with_structured_output(TravelExtraction)
 
+def _merge(new_val, old_val):
+    """Return new_val if it's set, otherwise keep old_val."""
+    return new_val if new_val is not None else old_val
+
+
 def router(state: GraphState) -> dict:
     user_message = state["messages"][-1]
     history_messages = state["messages"][:-1]
@@ -103,8 +111,10 @@ def router(state: GraphState) -> dict:
         extracted = travel_extractor.invoke(invocation_messages)
 
         data = extracted.dict()
+        logger.info(f"Router extracted intent: {data.get('intent')} | sub_action: {data.get('sub_action')}")
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"Router LLM extraction failed: {e}")
         data = {
             "intent": "unknown",
             "sub_action": "general",
@@ -121,26 +131,27 @@ def router(state: GraphState) -> dict:
         }
 
     return {
-        "intent": data.get("intent", "unknown"),
+        
+        "intent": _merge(data.get("intent") if data.get("intent") != "unknown" else None, state.get("intent")),
         "sub_action": data.get("sub_action", "general"),
-
-        "city": data.get("city"),
-        "check_in": data.get("check_in"),
-        "check_out": data.get("check_out"),
-
-        "origin": data.get("origin"),
-        "destination": data.get("destination"),
-        "flight_date": data.get("flight_date"),
-
-        "hotel_id": data.get("hotel_id"),
-        "guest_name": data.get("guest_name"),
-        "guest_email": data.get("guest_email"),
-        "room_type": data.get("room_type"),
-
-        "flight_id": data.get("flight_id"),
-        "passenger_name": data.get("passenger_name"),
-        "passenger_email": data.get("passenger_email"),
-
+    
+        "city":     _merge(data.get("city"),        state.get("city")),
+        "check_in": _merge(data.get("check_in"),    state.get("check_in")),
+        "check_out": _merge(data.get("check_out"),  state.get("check_out")),
+    
+        "origin":      _merge(data.get("origin"),      state.get("origin")),
+        "destination": _merge(data.get("destination"), state.get("destination")),
+        "flight_date": _merge(data.get("flight_date"), state.get("flight_date")),
+    
+        "hotel_id":   _merge(data.get("hotel_id"),   state.get("hotel_id")),
+        "guest_name": _merge(data.get("guest_name"), state.get("guest_name")),
+        "guest_email": _merge(data.get("guest_email"), state.get("guest_email")),
+        "room_type":  _merge(data.get("room_type"),  state.get("room_type")),
+    
+        "flight_id":        _merge(data.get("flight_id"),       state.get("flight_id")),
+        "passenger_name":   _merge(data.get("passenger_name"),  state.get("passenger_name")),
+        "passenger_email":  _merge(data.get("passenger_email"), state.get("passenger_email")),
+    
         "hotel_results": [],
         "flight_results": [],
         "response_text": "",
@@ -148,7 +159,55 @@ def router(state: GraphState) -> dict:
 
 
 
+
+
+def _parse_mcp_result(result) -> list:
+    """Normalize an MCP tool result into a plain list of dicts.
+
+    langchain_mcp_adapters may return any of:
+    - plain list of dicts                              (ideal)
+    - JSON string of a list or dict                    (string-serialized)
+    - list of TextContent dicts: [{"type","text":...}] (MCP content blocks)
+    """
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except Exception:
+            return []
+
+    if isinstance(result, list):
+        items: list = []
+        for item in result:
+            if isinstance(item, dict) and "text" in item:
+                try:
+                    inner = json.loads(item["text"])
+                    if isinstance(inner, list):
+                        items.extend(inner)
+                    elif isinstance(inner, dict):
+                        items.append(inner)
+                except Exception:
+                    items.append(item)
+            elif isinstance(item, str):
+                try:
+                    inner = json.loads(item)
+                    if isinstance(inner, list):
+                        items.extend(inner)
+                    elif isinstance(inner, dict):
+                        items.append(inner)
+                except Exception:
+                    pass
+            elif isinstance(item, dict):
+                items.append(item)
+        return items
+
+    if isinstance(result, dict):
+        return [result]
+
+    return []
+
+
 def _format_hotel(hotel: dict) -> str:
+
     name = hotel.get("name", "Unknown hotel")
 
     city_data = hotel.get("city", "unknown city")
@@ -157,7 +216,7 @@ def _format_hotel(hotel: dict) -> str:
     else:
         city = city_data
 
-    stars = hotel.get("stars", hotel.get("rating", "N/A"))
+    stars = hotel.get("starRating", hotel.get("stars", hotel.get("rating", "N/A")))
     price = hotel.get("price", hotel.get("pricePerNight", "N/A"))
     currency = hotel.get("currency", "USD")
 
@@ -225,7 +284,7 @@ def _format_flight(flight: dict) -> str:
 
 
 
-def hotel_node(state: GraphState) -> dict:
+async def hotel_node(state: GraphState) -> dict:
     city = state.get("city")
     check_in = state.get("check_in")
     check_out = state.get("check_out")
@@ -239,19 +298,14 @@ def hotel_node(state: GraphState) -> dict:
         check_out_date = state.get("check_out")
 
         missing = [
-            field
-            for field, value in [
-                ("hotel_id", hotel_id),
-                ("guest_name", guest_name),
-                ("guest_email", guest_email),
-                ("check_in", check_in_date),
-                ("check_out", check_out_date),
-                ("room_type", room_type),
-            ]
-            if not value
+            field for field, value in [
+                ("hotel_id", hotel_id), ("guest_name", guest_name), ("guest_email", guest_email), 
+                ("check_in", check_in_date), ("check_out", check_out_date), ("room_type", room_type)
+            ] if not value
         ]
 
         if missing:
+            logger.info(f"hotel_node missing booking fields: {missing}")
             return {
                 "hotel_results": [],
                 "flight_results": [],
@@ -262,34 +316,26 @@ def hotel_node(state: GraphState) -> dict:
                 ),
             }
 
-        result = book_hotel.invoke(
-            {
-                "hotel_id": hotel_id,
-                "guest_name": guest_name,
-                "guest_email": guest_email,
-                "check_in_date": check_in_date,
-                "check_out_date": check_out_date,
-                "room_type": room_type,
-            }
-        )
+        try:
+            async with hotel_mcp_tools() as tools:
+                result = await tools["book_hotel"].ainvoke(
+                    {
+                        "hotel_id": hotel_id,
+                        "guest_name": guest_name,
+                        "guest_email": guest_email,
+                        "check_in_date": check_in_date,
+                        "check_out_date": check_out_date,
+                        "room_type": room_type,
+                    })
 
-    elif city:
-        params = {
-            "city": city,
-        }
+        except Exception as e:
+            return {
+                "hotel_results": [],
+                "flight_results": [],
+                "response_text": "I'm having trouble connecting to the hotel service. Please try again later."
+            }   
+            
 
-        if check_in:
-            params["checkIn"] = check_in
-
-        if check_out:
-            params["checkOut"] = check_out
-
-        result = search_hotel.invoke(params)
-
-    else:
-        result = get_hotels.invoke({})
-
-    if state.get("sub_action") == "book":
         if isinstance(result, dict):
             confirmation = result.get("message") or result.get("status") or "Hotel booking completed."
             return {
@@ -304,12 +350,37 @@ def hotel_node(state: GraphState) -> dict:
             "response_text": "Hotel booking completed.",
         }
 
-    if isinstance(result, dict):
-        hotel_results = result.get("hotels", [])
-    elif isinstance(result, list):
-        hotel_results = result
+    elif city:
+        params = {"city": city}
+        if check_in:
+            params["checkIn"] = check_in
+        if check_out:
+            params["checkOut"] = check_out
+
+        try:
+            async with hotel_mcp_tools() as tools:
+                result = await tools["search_hotels"].ainvoke(params)
+        except Exception as e:
+            return {
+                "hotel_results": [],
+                "flight_results":[],
+                "response_text": "I'm having trouble connecting to the hotel service. Please try again later."
+            }        
+
     else:
-        hotel_results = []
+        try:
+            logger.info("Fetching all hotels...")
+            async with hotel_mcp_tools() as tools:
+                result = await tools["get_hotels"].ainvoke({})
+        except Exception as e:
+            return {
+                "hotel_results": [],
+                "flight_results":[],
+                "response_text": "I'm having trouble connecting to the hotel service. Please try again later."
+            }        
+        
+
+    hotel_results = _parse_mcp_result(result)
 
     if not hotel_results:
         return {
@@ -328,7 +399,7 @@ def hotel_node(state: GraphState) -> dict:
     }
 
 
-def flight_node(state: GraphState) -> dict:
+async def flight_node(state: GraphState) -> dict:
     origin = state.get("origin")
     destination = state.get("destination")
     flight_date = state.get("flight_date")
@@ -358,24 +429,48 @@ def flight_node(state: GraphState) -> dict:
                 ),
             }
 
-        result = book_flight.invoke(
-            {
-                "flight_id": flight_id,
-                "passenger_name": passenger_name,
-                "passenger_email": passenger_email,
+        try:
+            async with flight_mcp_tools() as tools:
+                result = await tools["book_flights"].ainvoke(
+                    {
+                        "flight_id": flight_id,
+                        "passenger_name": passenger_name,
+                        "passenger_email": passenger_email,
+                    }
+                )
+        except Exception as e:
+            return {
+                "hotel_results": [],
+                "flight_results": [],
+                "response_text": "I'm having trouble connecting to the flight service. Please try again later."
             }
-        )
 
-    elif origin and destination:
-        params = {
-            "origin": origin,
-            "destination": destination,
+        if isinstance(result, dict):
+            confirmation = result.get("message") or result.get("status") or "Flight booking completed."
+            return {
+                "flight_results": [],
+                "response_text": confirmation,
+            }
+
+        return {
+            "flight_results": [],
+            "response_text": "Flight booking completed.",
         }
 
+    elif origin and destination:
+        params = {"origin": origin, "destination": destination}
         if flight_date:
             params["date"] = flight_date
 
-        result = search_flights.invoke(params)
+        try:
+            async with flight_mcp_tools() as tools:
+                result = await tools["search_flights"].ainvoke(params)
+        except Exception as e:
+            return{
+                "hotel_results": [],
+                "flight_results": [],
+                "response_text": "I'm having trouble connecting to the flight service. Please try again later."
+            }        
 
     elif origin or destination:
         return {
@@ -388,29 +483,19 @@ def flight_node(state: GraphState) -> dict:
         }
 
     else:
-        result = get_flights.invoke({})
-
-    if state.get("sub_action") == "book":
-        if isinstance(result, dict):
-            confirmation = result.get("message") or result.get("status") or "Flight booking completed."
+        try:
+            logger.info("Fetching all flights...")
+            async with flight_mcp_tools() as tools:
+                result = await tools["get_flights"].ainvoke({})
+        except Exception as e:
             return {
-                "hotel_results": [],
-                "flight_results": [],
-                "response_text": confirmation,
+                "hotel_results":[],
+                "flight_results":[],
+                "response_text":"I'm having trouble connecting to the flight service. Please try again later."
             }
+        
 
-        return {
-            "hotel_results": [],
-            "flight_results": [],
-            "response_text": "Flight booking completed.",
-        }
-
-    if isinstance(result, dict):
-        flight_results = result.get("flights", [])
-    elif isinstance(result, list):
-        flight_results = result
-    else:
-        flight_results = []
+    flight_results = _parse_mcp_result(result)
 
     if not flight_results:
         return {
@@ -425,6 +510,64 @@ def flight_node(state: GraphState) -> dict:
     return {
         "hotel_results": [],
         "flight_results": flight_results,
+        "response_text": "",
+    }
+
+
+async def planner_node(state: GraphState) -> dict:
+    city = state.get("city")
+    check_in = state.get("check_in")
+    origin = state.get("origin")
+    flight_date = state.get("flight_date")
+    destination = state.get("destination") or city
+    
+    missing = []
+    if not city: missing.append("destination city")
+    if not check_in: missing.append("check-in date")
+    if not origin: missing.append("flight origin")
+    if not flight_date: missing.append("flight date")
+
+    if missing:
+        return {
+            "hotel_results": [],
+            "flight_results": [],
+            "response_text": f"I need a few more details to plan your trip. Please provide: {', '.join(missing)}.",
+        }
+
+    # Fetch hotels
+    hotel_res = []
+    try:
+        logger.info(f"Planner fetching hotels in {city}...")
+        hotel_params = {"city": city, "checkIn": check_in}
+        if state.get("check_out"):
+            hotel_params["checkOut"] = state.get("check_out")
+        async with hotel_mcp_tools() as tools:
+            h_result = await tools["search_hotels"].ainvoke(hotel_params)
+            hotel_res = _parse_mcp_result(h_result)
+    except Exception:
+        pass
+
+    # Fetch flights
+    flight_res = []
+    try:
+        logger.info(f"Planner fetching flights {origin} to {destination}...")
+        flight_params = {"origin": origin, "destination": destination, "date": flight_date}
+        async with flight_mcp_tools() as tools:
+            f_result = await tools["search_flights"].ainvoke(flight_params)
+            flight_res = _parse_mcp_result(f_result)
+    except Exception:
+        pass
+
+    if not hotel_res and not flight_res:
+        return {
+            "hotel_results": [],
+            "flight_results": [],
+            "response_text": "I couldn't find any hotels or flights for your trip. Please try different dates or locations.",
+        }
+
+    return {
+        "hotel_results": hotel_res,
+        "flight_results": flight_res,
         "response_text": "",
     }
 
@@ -469,11 +612,39 @@ def generate_response(state: GraphState) -> dict:
     hotel_results = state.get("hotel_results", [])
     flight_results = state.get("flight_results", [])
 
+    if state.get("intent") == "plan":
+        h_lines = [_format_hotel(h) for h in hotel_results[:5]] if hotel_results else ["No hotels found for this route/date."]
+        f_lines = [_format_flight(f) for f in flight_results[:5]] if flight_results else ["No flights found for this route/date."]
+        
+        return {
+            "hotel_results": hotel_results,
+            "flight_results": flight_results,
+            "response_text": (
+                f"**Here's your Trip Plan:**\n\n"
+                f"✈️ **Flights ({len(flight_results)} options):**\n" + "\n".join(f_lines) + "\n\n"
+                f"🏨 **Hotels ({len(hotel_results)} options):**\n" + "\n".join(h_lines)
+            )
+        }
+
+    if hotel_results and flight_results:
+        h_lines = [_format_hotel(h) for h in hotel_results[:5]]
+        f_lines = [_format_flight(f) for f in flight_results[:5]]
+        return {
+            "hotel_results": hotel_results,
+            "flight_results": flight_results,
+            "response_text": (
+                f"**Here's your Trip Plan:**\n\n"
+                f"✈️ **Flights ({len(flight_results)} options):**\n" + "\n".join(f_lines) + "\n\n"
+                f"🏨 **Hotels ({len(hotel_results)} options):**\n" + "\n".join(h_lines)
+            )
+        }
+
     if hotel_results:
         count = len(hotel_results)
         lines = [_format_hotel(hotel) for hotel in hotel_results[:5]]
 
         return {
+            "hotel_results": hotel_results,
             "response_text": (
                 f"I found {count} hotel option{'s' if count != 1 else ''}:\n"
                 + "\n".join(lines)
@@ -485,6 +656,7 @@ def generate_response(state: GraphState) -> dict:
         lines = [_format_flight(flight) for flight in flight_results[:5]]
 
         return {
+            "flight_results": flight_results,
             "response_text": (
                 f"I found {count} flight option{'s' if count != 1 else ''}:\n"
                 + "\n".join(lines)
@@ -492,6 +664,8 @@ def generate_response(state: GraphState) -> dict:
         }
 
     return {
+        "hotel_results": [],
+        "flight_results": [],
         "response_text": "I couldn't find matching travel options."
     }
 
@@ -504,5 +678,8 @@ def route_after_extraction(state: GraphState) -> str:
 
     if intent == "flight":
         return "flight"
+        
+    if intent == "plan":
+        return "planner"
 
     return "unknown"

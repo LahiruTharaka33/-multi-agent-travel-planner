@@ -15,7 +15,9 @@ Important rules:
 - Convert 3-letter airport codes to uppercase.
 - Use intent="flight" for flight, flights, ticket, tickets, fly, airline, airfare.
 - Use intent="hotel" for hotel, hotels, room, rooms, stay, accommodation.
-- Use intent="unknown" only if it is clearly not about hotel or flight search.
+- Use intent="plan" for trip, vacation, holiday, or when the user asks for BOTH hotel and flight together.
+- Use intent="unknown" only if it is clearly not about hotel, flight, trip planning, etc.
+- If the current message is a refinement of a previous request (e.g., "make it cheaper", "show only 5 star", "different dates", "instead"), infer the intent from the conversation history.
 
 Flight examples:
 User: "i need flights from AAA to BBB"
@@ -80,6 +82,17 @@ passenger_email = jane.smith@example.com
 origin = null
 destination = null
 flight_date = null
+
+Plan examples:
+User: "Plan a trip to Paris from London leaving on 2026-10-01 and staying until 2026-10-05"
+intent = plan
+sub_action = search
+city = Paris
+check_in = 2026-10-01
+check_out = 2026-10-05
+origin = London
+destination = Paris
+flight_date = 2026-10-01
 """
 
 

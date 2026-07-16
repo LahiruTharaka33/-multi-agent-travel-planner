@@ -1,11 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from agents.tools import get_hotels, get_flights
+#from agents.tools import get_hotels, get_flights
 from entity import ChatRequest, ChatResponse
 from agents.graph import graph
+import json
+import logging
+from fastapi.responses import StreamingResponse
 
 
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s"
+)
+logger = logging.getLogger("api")
 
 app = FastAPI()
 
@@ -21,13 +28,13 @@ app.add_middleware(
 def greeting():
     return {"message": "Welcome to the Multi-Agent Travel Planner API"}
 
-@app.get("/hotels")
-async def hotels():
-    return get_hotels.invoke({})
+# @app.get("/hotels")
+# async def hotels():
+#     return get_hotels.invoke({})
 
-@app.get("/flights")
-async def flights():
-    return get_flights.invoke({})
+# @app.get("/flights")
+# async def flights():
+#     return get_flights.invoke({})
 
 
 conversation_history_messages = []
@@ -42,34 +49,13 @@ async def chat(request: ChatRequest):
         flattened_messages.append(assistant_msg)
     flattened_messages.append(request.message)
 
-
-
-
-
     initial_state = {
         "messages": flattened_messages,
-        "intent": "",
-        "sub_action": "",
-        "city": None,
-        "check_in": None,
-        "check_out": None,
-        "origin": None,
-        "destination": None,
-        "flight_date": None,
-        "hotel_id": None,
-        "guest_name": None,
-        "guest_email": None,
-        "room_type": None,
-        "flight_id": None,
-        "passenger_name": None,
-        "passenger_email": None,
-        "hotel_results": [],
-        "flight_results": [],
-        "response_text": "",
     }
 
+    config = {"configurable": {"thread_id": request.session_id}}
 
-    result = graph.invoke(initial_state)
+    result =await graph.ainvoke(initial_state, config=config)
 
     response_text = result.get("response_text", "Something went wrong. Please try again.")
 
@@ -82,8 +68,64 @@ async def chat(request: ChatRequest):
         flights=result.get("flight_results", []) or None,
     )
 
+async def stream_graph_events(initial_state, session_id: str = "default"):
+    final_result = None
+    config = {"configurable": {"thread_id": session_id}}
+
+    final_result = ""
+    structured_hotels = []
+    structured_flights = []
+
+    async for event in graph.astream_events(initial_state, config=config, version="v2"):
+
+        event_type = event["event"]
+        node_name = event.get("name", "")
+
+        if event_type == "on_chain_end" and node_name in ("hotel_node","flight_node","planner_node","router"):
+            yield json.dumps({"type":"status","content": f"processing {node_name} completed..."})+"\n"
+        
+        if event_type == "on_chain_end" and node_name == "generate_response":
+            output = event.get("data", {}).get("output",{})
+            final_result = output.get("response_text","")
+            structured_hotels = output.get("hotel_results", [])
+            structured_flights = output.get("flight_results", [])
+    
+    if final_result:
+        yield json.dumps({"type":"result", "content":final_result})+"\n"
+        yield json.dumps({
+            "type": "structured_data", 
+            "hotels": structured_hotels, 
+            "flights": structured_flights
+        })+"\n"
+    else:
+        yield json.dumps ({"type":"result", "content":"Something went wrong. Please try again."})+"\n" 
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+
+    recent_pairs = conversation_history_messages[-3:]
+    flattened_messages = []
+    for user_msg, assistant_msg in recent_pairs:
+        flattened_messages.append(user_msg)
+        flattened_messages.append(assistant_msg)
+    flattened_messages.append(request.message)
+
+    initial_state = {
+        "messages": flattened_messages,
+    }
+
+
+    return StreamingResponse(
+        stream_graph_events(initial_state, session_id=request.session_id),
+        media_type="text/event-stream"
+    )
+    
+
+            
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8003)
 
 # Run the app: uvicorn main:app --reload

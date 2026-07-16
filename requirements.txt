@@ -8,3 +8,7 @@ langchain-openai
 langchain-core
 langgraph
 gradio
+
+fastmcp
+
+langchain_mcp_adapters
