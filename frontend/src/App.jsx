@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 
-const STREAM_URL = 'http://localhost:8003/chat/stream'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003'
+const STREAM_URL = `${API_BASE}/chat/stream`
 
 export default function App() {
   const [messages, setMessages]   = useState([])
@@ -61,7 +62,13 @@ export default function App() {
               const last = prev[prev.length - 1];
               return [
                 ...prev.slice(0, -1),
-                { ...last, hotels: chunk.hotels || [], flights: chunk.flights || [] }
+                { 
+                  ...last, 
+                  hotels: chunk.hotels || [], 
+                  flights: chunk.flights || [],
+                  weather: chunk.weather || [],
+                  transit: chunk.transit || []
+                }
               ]
             })
           }
@@ -133,6 +140,57 @@ export default function App() {
                             <div>⭐ {h.starRating || h.stars} Star</div>
                             <div>City: {h.city}</div>
                             <div className="rooms">Available rooms: {h.availableRooms || 0}</div>
+                          </div>
+                        </div>
+                      ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {msg.weather?.length > 0 && (
+                    <div className="result-cards weather">
+                      <h4>🌤️ Weather Forecast</h4>
+                      <div className="card-container">
+                      {msg.weather.map((w, i) => (
+                        <div key={i} className="result-card weather-card">
+                          <div className="card-header">
+                            <span className="weather-city">📍 {w.city}</span>
+                            <span className="weather-temp">{w.temperature}</span>
+                          </div>
+                          <div className="card-body">
+                            <div>Forecast: <strong>{w.condition}</strong></div>
+                            <div>Humidity: {w.humidity}</div>
+                            <div>Wind: {w.wind}</div>
+                            <div className="card-id">{w.source}</div>
+                          </div>
+                        </div>
+                      ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {msg.transit?.length > 0 && (
+                    <div className="result-cards transit">
+                      <h4>🚊 Transit & Routes</h4>
+                      <div className="card-container">
+                      {msg.transit.map((t, i) => (
+                        <div key={i} className="result-card transit-card">
+                          <div className="card-header">
+                            <span className="transit-mode">🚊 {t.mode}</span>
+                            <span className="transit-price">{t.price}</span>
+                          </div>
+                          <div className="card-body">
+                            <div>From: {t.origin}</div>
+                            <div>To: {t.destination}</div>
+                            <div>Duration: <strong>{t.duration}</strong> ({t.distance})</div>
+                            {t.steps?.length > 0 && (
+                              <ul className="transit-steps">
+                                {t.steps.map((step, idx) => (
+                                  <li key={idx}>{step}</li>
+                                ))}
+                              </ul>
+                            )}
+                            <div className="card-id">{t.source}</div>
                           </div>
                         </div>
                       ))}

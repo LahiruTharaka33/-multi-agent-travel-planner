@@ -1,6 +1,9 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from .nodes import router, hotel_node, flight_node, unknown_node, planner_node, generate_response, route_after_extraction
+from .nodes import (
+    router, hotel_node, flight_node, weather_node, transit_node, unknown_node, 
+    planner_node, generate_response, route_after_extraction
+)
 from .entity import GraphState
 
 
@@ -10,6 +13,8 @@ def build_graph() -> StateGraph:
     builder.add_node("router", router)
     builder.add_node("hotel_node", hotel_node)
     builder.add_node("flight_node", flight_node)
+    builder.add_node("weather_node", weather_node)
+    builder.add_node("transit_node", transit_node)
     builder.add_node("planner_node", planner_node)
     builder.add_node("unknown_node", unknown_node)
     builder.add_node("generate_response", generate_response)
@@ -23,12 +28,16 @@ def build_graph() -> StateGraph:
             "hotel": "hotel_node",
             "flight": "flight_node",
             "planner": "planner_node",
+            "weather": "weather_node",
+            "transit": "transit_node",
             "unknown": "unknown_node",
         },
     )
 
     builder.add_edge("hotel_node", "generate_response")
     builder.add_edge("flight_node", "generate_response")
+    builder.add_edge("weather_node", "generate_response")
+    builder.add_edge("transit_node", "generate_response")
     builder.add_edge("planner_node", "generate_response")
     builder.add_edge("unknown_node", "generate_response")
     builder.add_edge("generate_response", END)

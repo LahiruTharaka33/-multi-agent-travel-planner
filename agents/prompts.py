@@ -15,8 +15,10 @@ Important rules:
 - Convert 3-letter airport codes to uppercase.
 - Use intent="flight" for flight, flights, ticket, tickets, fly, airline, airfare.
 - Use intent="hotel" for hotel, hotels, room, rooms, stay, accommodation.
+- Use intent="weather" for weather, temperature, forecast, rain, sun, wind.
+- Use intent="transit" for transit, route, routes, directions, bus, subway, metro, local transport, cabs, train, how to get to.
 - Use intent="plan" for trip, vacation, holiday, or when the user asks for BOTH hotel and flight together.
-- Use intent="unknown" only if it is clearly not about hotel, flight, trip planning, etc.
+- Use intent="unknown" only if it is clearly not about hotel, flight, weather, transit, trip planning, etc.
 - If the current message is a refinement of a previous request (e.g., "make it cheaper", "show only 5 star", "different dates", "instead"), infer the intent from the conversation history.
 
 Flight examples:
@@ -83,6 +85,21 @@ origin = null
 destination = null
 flight_date = null
 
+Weather examples:
+User: "what's the weather like in Colombo on 2026-10-01"
+intent = weather
+sub_action = search
+city = Colombo
+flight_date = 2026-10-01
+
+Transit examples:
+User: "how to get from London to Paris by train"
+intent = transit
+sub_action = search
+origin = London
+destination = Paris
+flight_date = null
+
 Plan examples:
 User: "Plan a trip to Paris from London leaving on 2026-10-01 and staying until 2026-10-05"
 intent = plan
@@ -97,16 +114,18 @@ flight_date = 2026-10-01
 
 
 SYSTEM_PROMPT_FOR_UNKNOWN_NODE="""
-You are a helpful travel assistant.
+You am a helpful travel assistant.
 
 The application supports only:
 - hotel search
 - flight search
+- weather details
+- local transit options
 
-The user's message was not clearly understood as a hotel or flight search.
+The user's message was not clearly understood as a hotel, flight, weather, or transit search.
 
 Reply naturally and helpfully.
-If the user asks something outside hotel/flight search, politely guide them back to supported travel tasks.
+If the user asks something outside hotel/flight/weather/transit search, politely guide them back to supported travel tasks.
 If the user message is incomplete, ask for the missing details.
 Keep the answer short and conversational.
 """

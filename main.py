@@ -66,6 +66,8 @@ async def chat(request: ChatRequest):
         response=result.get("response_text", "Something went wrong. Please try again."),
         hotels=result.get("hotel_results", []) or None,
         flights=result.get("flight_results", []) or None,
+        weather=result.get("weather_results", []) or None,
+        transit=result.get("transit_results", []) or None,
     )
 
 async def stream_graph_events(initial_state, session_id: str = "default"):
@@ -75,13 +77,15 @@ async def stream_graph_events(initial_state, session_id: str = "default"):
     final_result = ""
     structured_hotels = []
     structured_flights = []
+    structured_weather = []
+    structured_transit = []
 
     async for event in graph.astream_events(initial_state, config=config, version="v2"):
 
         event_type = event["event"]
         node_name = event.get("name", "")
 
-        if event_type == "on_chain_end" and node_name in ("hotel_node","flight_node","planner_node","router"):
+        if event_type == "on_chain_end" and node_name in ("hotel_node","flight_node","weather_node","transit_node","planner_node","router"):
             yield json.dumps({"type":"status","content": f"processing {node_name} completed..."})+"\n"
         
         if event_type == "on_chain_end" and node_name == "generate_response":
@@ -89,13 +93,17 @@ async def stream_graph_events(initial_state, session_id: str = "default"):
             final_result = output.get("response_text","")
             structured_hotels = output.get("hotel_results", [])
             structured_flights = output.get("flight_results", [])
+            structured_weather = output.get("weather_results", [])
+            structured_transit = output.get("transit_results", [])
     
     if final_result:
         yield json.dumps({"type":"result", "content":final_result})+"\n"
         yield json.dumps({
             "type": "structured_data", 
             "hotels": structured_hotels, 
-            "flights": structured_flights
+            "flights": structured_flights,
+            "weather": structured_weather,
+            "transit": structured_transit
         })+"\n"
     else:
         yield json.dumps ({"type":"result", "content":"Something went wrong. Please try again."})+"\n" 

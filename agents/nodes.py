@@ -6,16 +6,16 @@ logger = logging.getLogger("agents")
 
 from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from .mcp_client import hotel_mcp_tools, flight_mcp_tools
+from .mcp_client import hotel_mcp_tools, flight_mcp_tools, weather_mcp_tools, transit_mcp_tools
 from .llm import llm
 from .prompts import get_system_prompt_with_history, get_system_prompt_for_unknown_node
 from .entity import GraphState
 
 
 class TravelExtraction(BaseModel):
-    intent: Literal["hotel", "flight", "unknown", "plan"] = Field(
+    intent: Literal["hotel", "flight", "unknown", "plan", "weather", "transit"] = Field(
         default="unknown",
-        description="Main user intent: hotel, flight, or unknown."
+        description="Main user intent: hotel, flight, weather, transit or unknown."
     )
 
     sub_action: Literal["search", "list_all","book", "general"] = Field(
@@ -204,6 +204,40 @@ def _parse_mcp_result(result) -> list:
         return [result]
 
     return []
+
+
+def _format_weather(report: dict) -> str:
+    city = report.get("city", "Unknown")
+    date = report.get("date", "N/A")
+    condition = report.get("condition", "N/A")
+    temp = report.get("temperature", "N/A")
+    humidity = report.get("humidity", "N/A")
+    wind = report.get("wind", "N/A")
+    source = report.get("source", "")
+    src_str = f" (via {source})" if source else ""
+    
+    return (
+        f"🌡️ **{city} Weather ({date}){src_str}:**\n"
+        f"- Condition: {condition}\n"
+        f"- Temperature: {temp}\n"
+        f"- Humidity: {humidity}\n"
+        f"- Wind: {wind}"
+    )
+
+
+def _format_transit(route: dict) -> str:
+    origin = route.get("origin", "N/A")
+    destination = route.get("destination", "N/A")
+    mode = route.get("mode", "N/A")
+    duration = route.get("duration", "N/A")
+    distance = route.get("distance", "N/A")
+    price = route.get("price", "N/A")
+    steps = route.get("steps", [])
+    steps_str = "\n  - " + "\n  - ".join(steps) if steps else ""
+    return (
+        f"➡️ **{mode} ({duration}, {distance})** - Est: {price}\n"
+        f"  Path: {origin} to {destination}{steps_str}"
+    )
 
 
 def _format_hotel(hotel: dict) -> str:
@@ -558,16 +592,109 @@ async def planner_node(state: GraphState) -> dict:
     except Exception:
         pass
 
+    # Fetch weather
+    weather_res = []
+    try:
+        logger.info(f"Planner fetching weather forecast in {city}...")
+        w_params = {"city": city}
+        if check_in:
+            w_params["date"] = check_in
+        async with weather_mcp_tools() as tools:
+            w_result = await tools["get_weather"].ainvoke(w_params)
+            weather_res = _parse_mcp_result(w_result)
+    except Exception as e:
+        logger.error(f"Planner fetching weather failed: {e}")
+        pass
+
+    # Fetch transit
+    transit_res = []
+    try:
+        if origin and destination:
+            logger.info(f"Planner fetching transit from {origin} to {destination}...")
+            t_params = {"origin": origin, "destination": destination}
+            async with transit_mcp_tools() as tools:
+                t_result = await tools["get_transit_options"].ainvoke(t_params)
+                transit_res = _parse_mcp_result(t_result)
+    except Exception as e:
+        logger.error(f"Planner fetching transit failed: {e}")
+        pass
+
     if not hotel_res and not flight_res:
         return {
             "hotel_results": [],
             "flight_results": [],
+            "weather_results": weather_res,
+            "transit_results": transit_res,
             "response_text": "I couldn't find any hotels or flights for your trip. Please try different dates or locations.",
         }
 
     return {
         "hotel_results": hotel_res,
         "flight_results": flight_res,
+        "weather_results": weather_res,
+        "transit_results": transit_res,
+        "response_text": "",
+    }
+
+
+async def weather_node(state: GraphState) -> dict:
+    city = state.get("city")
+    check_in = state.get("check_in")
+    flight_date = state.get("flight_date")
+    date = flight_date or check_in
+
+    if not city:
+        return {
+            "weather_results": [],
+            "response_text": "Please tell me which city you want weather information for.",
+        }
+
+    weather_res = []
+    try:
+        logger.info(f"Fetching weather for {city}...")
+        params = {"city": city}
+        if date:
+            params["date"] = date
+        async with weather_mcp_tools() as tools:
+            result = await tools["get_weather"].ainvoke(params)
+            weather_res = _parse_mcp_result(result)
+    except Exception as e:
+        logger.error(f"Weather service tool failed: {e}")
+        return {
+            "weather_results": [],
+            "response_text": f"I'm having trouble connecting to the weather service. Error: {str(e)}",
+        }
+
+    return {
+        "weather_results": weather_res,
+        "response_text": "",
+    }
+
+
+async def transit_node(state: GraphState) -> dict:
+    origin = state.get("origin")
+    destination = state.get("destination")
+    city = state.get("city")
+
+    actual_origin = origin or city or "London"
+    actual_dest = destination or city or "Paris"
+
+    transit_res = []
+    try:
+        logger.info(f"Fetching transit from {actual_origin} to {actual_dest}...")
+        params = {"origin": actual_origin, "destination": actual_dest}
+        async with transit_mcp_tools() as tools:
+            result = await tools["get_transit_options"].ainvoke(params)
+            transit_res = _parse_mcp_result(result)
+    except Exception as e:
+        logger.error(f"Transit service tool failed: {e}")
+        return {
+            "transit_results": [],
+            "response_text": f"I'm having trouble connecting to the transit service. Error: {str(e)}",
+        }
+
+    return {
+        "transit_results": transit_res,
         "response_text": "",
     }
 
@@ -611,18 +738,46 @@ def generate_response(state: GraphState) -> dict:
 
     hotel_results = state.get("hotel_results", [])
     flight_results = state.get("flight_results", [])
+    weather_results = state.get("weather_results", [])
+    transit_results = state.get("transit_results", [])
 
     if state.get("intent") == "plan":
         h_lines = [_format_hotel(h) for h in hotel_results[:5]] if hotel_results else ["No hotels found for this route/date."]
         f_lines = [_format_flight(f) for f in flight_results[:5]] if flight_results else ["No flights found for this route/date."]
+        w_lines = [_format_weather(w) for w in weather_results[:5]] if weather_results else ["No weather info found for this route/date."]
+        t_lines = [_format_transit(t) for t in transit_results[:5]] if transit_results else ["No transit routing info found for this route/date."]
         
         return {
             "hotel_results": hotel_results,
             "flight_results": flight_results,
+            "weather_results": weather_results,
+            "transit_results": transit_results,
             "response_text": (
                 f"**Here's your Trip Plan:**\n\n"
                 f"✈️ **Flights ({len(flight_results)} options):**\n" + "\n".join(f_lines) + "\n\n"
-                f"🏨 **Hotels ({len(hotel_results)} options):**\n" + "\n".join(h_lines)
+                f"🏨 **Hotels ({len(hotel_results)} options):**\n" + "\n".join(h_lines) + "\n\n"
+                f"🌤️ **Weather Forecast:**\n" + "\n".join(w_lines) + "\n\n"
+                f"🚊 **Transit/Routes Info:**\n" + "\n".join(t_lines)
+            )
+        }
+
+    if state.get("intent") == "weather" or (weather_results and not hotel_results and not flight_results and not transit_results):
+        w_lines = [_format_weather(w) for w in weather_results[:5]]
+        return {
+            "weather_results": weather_results,
+            "response_text": (
+                f"Here is the weather forecast:\n"
+                + "\n".join(w_lines)
+            )
+        }
+
+    if state.get("intent") == "transit" or (transit_results and not hotel_results and not flight_results):
+        t_lines = [_format_transit(t) for t in transit_results[:5]]
+        return {
+            "transit_results": transit_results,
+            "response_text": (
+                f"Here are the transit/routes options:\n"
+                + "\n".join(t_lines)
             )
         }
 
@@ -681,5 +836,11 @@ def route_after_extraction(state: GraphState) -> str:
         
     if intent == "plan":
         return "planner"
+
+    if intent == "weather":
+        return "weather"
+
+    if intent == "transit":
+        return "transit"
 
     return "unknown"

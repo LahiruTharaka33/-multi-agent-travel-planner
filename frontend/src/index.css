@@ -393,6 +393,57 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
 
+.weather-card {
+  border-color: rgba(0, 180, 216, 0.25);
+}
+
+.weather-card:hover {
+  border-color: var(--accent);
+}
+
+.weather-city {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: #fff;
+}
+
+.weather-temp {
+  color: #90e0ef;
+  font-weight: bold;
+  font-size: 0.95rem;
+}
+
+.transit-card {
+  border-color: rgba(72, 202, 228, 0.25);
+}
+
+.transit-card:hover {
+  border-color: #48cae4;
+}
+
+.transit-mode {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: #fff;
+}
+
+.transit-price {
+  color: #90e0ef;
+  font-weight: bold;
+  font-size: 0.95rem;
+}
+
+.transit-steps {
+  margin: 6px 0 0 0;
+  padding-left: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.transit-steps li {
+  margin-bottom: 2px;
+}
+
 /* ── Responsive (mobile) ─────────── */
 @media (max-width: 640px) {
   .activity-panel { display: none; }

@@ -8,6 +8,8 @@ load_dotenv()
 
 HOTEL_MCP_URL = os.getenv("HOTEL_MCP_URL", "http://localhost:8001/mcp")
 FLIGHT_MCP_URL = os.getenv("FLIGHT_MCP_URL", "http://localhost:8002/mcp")
+WEATHER_MCP_URL = os.getenv("WEATHER_MCP_URL", "http://localhost:8004/mcp")
+TRANSIT_MCP_URL = os.getenv("TRANSIT_MCP_URL", "http://localhost:8005/mcp")
 
 
 #HOTEL_MCP_URL = "http://localhost:8001/mcp"
@@ -30,6 +32,26 @@ async def hotel_mcp_tools():
 async def flight_mcp_tools():
     """Async context manager that yields flight tools with an active MCP session."""
     async with streamablehttp_client(FLIGHT_MCP_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await load_mcp_tools(session)
+            yield {tool.name: tool for tool in tools}
+
+
+@asynccontextmanager
+async def weather_mcp_tools():
+    """Async context manager that yields weather tools with an active MCP session."""
+    async with streamablehttp_client(WEATHER_MCP_URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await load_mcp_tools(session)
+            yield {tool.name: tool for tool in tools}
+
+
+@asynccontextmanager
+async def transit_mcp_tools():
+    """Async context manager that yields transit tools with an active MCP session."""
+    async with streamablehttp_client(TRANSIT_MCP_URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await load_mcp_tools(session)

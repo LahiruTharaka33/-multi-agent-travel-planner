@@ -25,5 +25,7 @@ class GraphState(TypedDict):
 
     hotel_results: List[dict]
     flight_results: List[dict]
+    weather_results: List[dict]
+    transit_results: List[dict]
 
     response_text: str

@@ -10,3 +10,5 @@ class ChatResponse(BaseModel):
     response: str
     hotels: Optional[List[dict]] = None
     flights: Optional[List[dict]] = None
+    weather: Optional[List[dict]] = None
+    transit: Optional[List[dict]] = None
