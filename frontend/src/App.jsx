@@ -38,18 +38,25 @@ export default function App() {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ''
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
-        const text = decoder.decode(value)
-        const lines = text.split('\n').filter(l => l.trim())
+        buffer += decoder.decode(value, { stream: true })
+        // Split on newline
+        const lines = buffer.split('\n')
+        // Pop the last element (which might be an incomplete line) and keep it in the buffer
+        buffer = lines.pop() || ''
 
         for (const line of lines) {
-          const chunk = JSON.parse(line)
+          if (!line.trim()) continue;
+          
+          try {
+            const chunk = JSON.parse(line)
 
-          if (chunk.type === 'status') {
+            if (chunk.type === 'status') {
             setActivity(prev => [...prev, chunk.content])
           } else if (chunk.type === 'result') {
             // replace the last "Thinking..." message with the real answer
@@ -71,6 +78,9 @@ export default function App() {
                 }
               ]
             })
+            }
+          } catch (e) {
+            console.warn("Incomplete chunk parsed:", e)
           }
         }
       }
