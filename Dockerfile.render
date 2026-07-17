@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install all dependencies in one layer
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    langgraph \
+    langchain-openai \
+    langchain-core \
+    langchain-mcp-adapters \
+    mcp \
+    fastmcp \
+    python-dotenv \
+    pydantic
+
+# Copy project files
+COPY . .
+
+# Make the startup script executable
+RUN chmod +x start_render.sh
+
+# The main process to run
+CMD ["./start_render.sh"]

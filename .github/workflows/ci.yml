@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build_docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Ensure compose validates
+        run: docker-compose config
+
+      - name: Test backend build
+        run: docker build -t tripweaver_backend:test -f Dockerfile.backend .
+
+      - name: Test MCP build
+        run: docker build -t tripweaver_mcp:test -f Dockerfile.mcp .
+
+      - name: Lint Python Files (Syntax Check)
+        run: |
+          python -m py_compile main.py
+          python -m py_compile mcp_servers/hotel_service.py
+          python -m py_compile agents/nodes.py

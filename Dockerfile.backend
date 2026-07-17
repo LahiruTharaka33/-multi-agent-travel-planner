@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install specific required core dependencies manually 
+# (Since there is no requirements.txt, we install them directly)
+
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    langgraph \
+    langchain-openai \
+    langchain-core \
+    langchain-mcp-adapters \
+    mcp \
+    python-dotenv \
+    pydantic
+
+# Copy the backend files (agents package + entrypoint files)
+COPY agents/ ./agents/
+COPY main.py .
+
+# Expose FastAPI port
+EXPOSE 8003
+
+# Run the API
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]

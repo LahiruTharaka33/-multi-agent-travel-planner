@@ -1,0 +1,16 @@
+__pycache__/
+.venv/
+venv/
+env/
+.env
+.git/
+.gitignore
+frontend/
+node_modules/
+
+# Local database/checkpoint ignore
+*.sqlite
+*.db
+
+# macOS
+.DS_Store

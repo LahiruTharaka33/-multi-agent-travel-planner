@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir mcp fastmcp python-dotenv
+
+# Copy all the MCP server modules
+COPY mcp_servers/ ./mcp_servers/
+
+# Expose standard default base port (Docker Compose will map these individually)
+EXPOSE 8000
+
+# Entrypoint expects script path via CMD (e.g. CMD ["python", "mcp_servers/hotel_service.py"])

@@ -1,0 +1,75 @@
+version: "3.8"
+
+services:
+  hotel_mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: hotel_mcp
+    command: ["python", "mcp_servers/hotel_service.py"]
+    ports:
+      - "8001:8001"
+    networks:
+      - tripweaver_net
+
+  flight_mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: flight_mcp
+    command: ["python", "mcp_servers/flight_service.py"]
+    ports:
+      - "8002:8002"
+    networks:
+      - tripweaver_net
+
+  weather_mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: weather_mcp
+    command: ["python", "mcp_servers/weather_service.py"]
+    ports:
+      - "8004:8004"
+    networks:
+      - tripweaver_net
+
+  transit_mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: transit_mcp
+    command: ["python", "mcp_servers/transit_service.py"]
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    networks:
+      - tripweaver_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: backend
+    env_file:
+      - .env
+    environment:
+      # Inject Docker DNS aliases so FastHTTP looks at the correct internal containers rather than 'localhost'
+      - HOTEL_MCP_URL=http://hotel_mcp:8001/mcp
+      - FLIGHT_MCP_URL=http://flight_mcp:8002/mcp
+      - WEATHER_MCP_URL=http://weather_mcp:8004/mcp
+      - TRANSIT_MCP_URL=http://transit_mcp:8005/mcp
+    ports:
+      - "8003:8003"
+    depends_on:
+      - hotel_mcp
+      - flight_mcp
+      - weather_mcp
+      - transit_mcp
+    networks:
+      - tripweaver_net
+
+networks:
+  tripweaver_net:
+    driver: bridge
